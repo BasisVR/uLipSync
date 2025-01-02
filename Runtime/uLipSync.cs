@@ -18,8 +18,6 @@ namespace uLipSync
         bool _allocated = false;
         int _index = 0;
         bool _isDataReceived = false;
-
-        NativeArray<float> _rawInputData;
         NativeArray<float> _inputData;
         NativeArray<float> _mfcc;
         NativeArray<float> _mfccForOther;
@@ -33,7 +31,7 @@ namespace uLipSync
 
         public NativeArray<float> mfcc => _mfccForOther;
         public LipSyncInfo result { get; private set; } = new LipSyncInfo();
-
+        public float[] Inputs;
 #if UNITY_WEBGL
     public bool autoAudioSyncOnWebGL = true;
     [Range(-0.1f, 0.3f)] public float audioSyncOffsetTime = 0f;
@@ -57,17 +55,6 @@ namespace uLipSync
     public NativeArray<float> melSpectrum => _debugMelSpectrumForOther;
     public NativeArray<float> melCepstrum => _debugMelCepstrumForOther;
 #endif
-
-        int inputSampleCount
-        {
-            get
-            {
-                if (!profile) return AudioSettings.outputSampleRate;
-                float r = (float)AudioSettings.outputSampleRate / profile.targetSampleRate;
-                return Mathf.CeilToInt(profile.sampleCount * r);
-            }
-        }
-
         int mfccNum => profile ? profile.mfccNum : 12;
 
         void Awake()
@@ -118,10 +105,10 @@ namespace uLipSync
 
             lock (_lockObject)
             {
-                int n = inputSampleCount;
+                CachedInputSampleCount = inputSampleCount;
                 phonemeCount = profile ? profile.mfccs.Count : 1;
-                _rawInputData = new NativeArray<float>(n, Allocator.Persistent);
-                _inputData = new NativeArray<float>(n, Allocator.Persistent);
+                Inputs = new float[CachedInputSampleCount];
+                _inputData = new NativeArray<float>(CachedInputSampleCount, Allocator.Persistent);
                 _mfcc = new NativeArray<float>(mfccNum, Allocator.Persistent);
                 _mfccForOther = new NativeArray<float>(mfccNum, Allocator.Persistent);
                 _means = new NativeArray<float>(mfccNum, Allocator.Persistent);
@@ -152,7 +139,7 @@ namespace uLipSync
 
             lock (_lockObject)
             {
-                _rawInputData.Dispose();
+                Inputs = null;
                 _inputData.Dispose();
                 _mfcc.Dispose();
                 _mfccForOther.Dispose();
@@ -176,7 +163,7 @@ namespace uLipSync
 
         void UpdateBuffers()
         {
-            if (inputSampleCount != _rawInputData.Length ||
+            if (CachedInputSampleCount != Inputs.Length ||
                 profile.mfccs.Count * mfccNum != _phonemes.Length
 #if ULIPSYNC_DEBUG
             || profile.melFilterBankChannels != _debugMelSpectrum.Length
@@ -293,10 +280,11 @@ namespace uLipSync
             if (!_isDataReceived) return;
             _isDataReceived = false;
 
+            CachedInputSampleCount = inputSampleCount;
             int index = 0;
             lock (_lockObject)
             {
-                _inputData.CopyFrom(_rawInputData);
+                _inputData.CopyFrom(Inputs);
                 _means.CopyFrom(profile.means);
                 _standardDeviations.CopyFrom(profile.standardDeviation);
                 index = _index;
@@ -343,18 +331,24 @@ namespace uLipSync
 
             _requestedCalibrationVowels.Clear();
         }
-
-        public void OnDataReceived(float[] input, int channels)
+        int inputSampleCount
         {
-            if (_rawInputData.Length == 0) return;
-
+            get
+            {
+                if (!profile) return AudioSettings.outputSampleRate;
+                float r = (float)AudioSettings.outputSampleRate / profile.targetSampleRate;
+                return Mathf.CeilToInt(profile.sampleCount * r);
+            }
+        }
+        public int CachedInputSampleCount;
+        public void OnDataReceived(float[] input, int channels,int length)
+        {
             lock (_lockObject)
             {
-                int n = _rawInputData.Length;
-                _index = _index % n;
-                for (int i = 0; i < input.Length; i += channels)
+                _index = _index % CachedInputSampleCount;
+                for (int i = 0; i < length; i += channels)
                 {
-                    _rawInputData[_index++ % n] = input[i];
+                    Inputs[_index++ % CachedInputSampleCount] = input[i];
                 }
             }
 
@@ -424,7 +418,7 @@ namespace uLipSync
 
         public void OnBakeUpdate(float[] input, int channels)
         {
-            OnDataReceived(input, channels);
+            OnDataReceived(input, channels,input.Length);
             UpdateBuffers();
             UpdatePhonemes();
             ScheduleJob();
