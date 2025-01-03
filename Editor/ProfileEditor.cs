@@ -328,8 +328,6 @@ public class ProfileEditor : Editor
         foreach (var data in _bakedDataList)
         {
             var editor = (BakedDataEditor)Editor.CreateEditor(data, typeof(BakedDataEditor));
-            editor.Bake();
-
             var progress = (float)(i++) / _bakedDataList.Count;
             var msg = $"Baking... {i}/{_bakedDataList.Count}";
             EditorUtility.DisplayProgressBar("uLipSync", msg, progress);

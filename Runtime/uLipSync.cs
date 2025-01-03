@@ -49,11 +49,103 @@ namespace uLipSync
             {
                 return;
             }
-            UpdateResult();
+            _jobHandle.Complete(); // Wait for async job completion
+            _mfccForOther.CopyFrom(_mfcc);
+
+            // Main phoneme identification
+            int index = _info[0].mainPhonemeIndex;
+            string mainPhoneme = profile.GetPhoneme(index);
+
+            // Calculate sumScore and populate UpdateResultsBuffer
+            float sumScore = 0f;
+            _scores.CopyTo(UpdateResultsBuffer);
+            for (int i = 0; i < phonemeCount; ++i)
+            {
+                sumScore += UpdateResultsBuffer[i];
+            }
+
+            // Clear and update _ratios
+            _ratios.Clear();
+            float invSumScore = sumScore > 0f ? 1f / sumScore : 0f; // Precompute inverse for efficiency
+            for (int i = 0; i < phonemeCount; ++i)
+            {
+                string phoneme = profile.GetPhoneme(i);
+                float ratio = UpdateResultsBuffer[i] * invSumScore; // Avoid division in loop
+                if (!_ratios.TryGetValue(phoneme, out float existingRatio))
+                {
+                    _ratios[phoneme] = ratio; // Add new
+                }
+                else
+                {
+                    _ratios[phoneme] = existingRatio + ratio; // Accumulate
+                }
+            }
+
+            // Normalize volume
+            float rawVol = _info[0].volume;
+            float normVol = math.clamp((math.log10(rawVol) - Common.DefaultMinVolume) / (Common.DefaultMaxVolume - Common.DefaultMinVolume), 0f, 1f);
+
+            // Update result
+            result = new LipSyncInfo()
+            {
+                phoneme = mainPhoneme,
+                volume = normVol,
+                rawVolume = rawVol,
+                phonemeRatios = _ratios,
+            };
+            index = 0;
             uLipSyncBlendShape.OnLipSyncUpdate(result);
-            UpdateCalibration();
-            UpdatePhonemes();
-            ScheduleJob();
+            int Count = _requestedCalibrationVowels.Count;
+            for (int Index = 0; Index < Count; Index++)
+            {
+                index = _requestedCalibrationVowels[Index];
+                profile.UpdateMfcc(index, mfcc, true);
+            }
+
+            _requestedCalibrationVowels.Clear();
+             index = 0;
+
+            for (int i = 0; i < mfccsCount && index < PhonemesCount; i++)
+            {
+                NativeArray<float> mfccNativeArray = profile.mfccs[i].mfccNativeArray;
+
+                // Determine how many elements to copy
+                int remainingLength = PhonemesCount - index;
+                int copyLength = math.min(12, remainingLength);
+
+                // Use NativeArray.CopyTo for batch copying
+                NativeArray<float>.Copy(mfccNativeArray, 0, _phonemes, index, copyLength);
+
+                index += copyLength;
+            }
+            if (!_isDataReceived) return;
+            _isDataReceived = false;
+
+            CachedInputSampleCount = inputSampleCount;
+            index = 0;
+            lock (_lockObject)
+            {
+                _inputData.CopyFrom(Inputs);
+                index = _index;
+            }
+
+            LipSyncJob lipSyncJob = new LipSyncJob()
+            {
+                input = _inputData,
+                startIndex = index,
+                outputSampleRate = outputSampleRate,
+                targetSampleRate = profile.targetSampleRate,
+                melFilterBankChannels = profile.melFilterBankChannels,
+                means = _means,
+                standardDeviations = _standardDeviations,
+                mfcc = _mfcc,
+                phonemes = _phonemes,
+                compareMethod = profile.compareMethod,
+                scores = _scores,
+                info = _info,
+            };
+
+            _jobHandle = lipSyncJob.Schedule();
         }
         void AllocateBuffers()
         {
@@ -109,120 +201,9 @@ namespace uLipSync
                 _info.Dispose();
             }
         }
-        void UpdateResult()
-        {
-            _jobHandle.Complete(); // Wait for async job completion
-            _mfccForOther.CopyFrom(_mfcc);
-
-            // Main phoneme identification
-            int index = _info[0].mainPhonemeIndex;
-            string mainPhoneme = profile.GetPhoneme(index);
-
-            // Calculate sumScore and populate UpdateResultsBuffer
-            float sumScore = 0f;
-            _scores.CopyTo(UpdateResultsBuffer);
-            for (int i = 0; i < phonemeCount; ++i)
-            {
-                sumScore += UpdateResultsBuffer[i];
-            }
-
-            // Clear and update _ratios
-            _ratios.Clear();
-            float invSumScore = sumScore > 0f ? 1f / sumScore : 0f; // Precompute inverse for efficiency
-            for (int i = 0; i < phonemeCount; ++i)
-            {
-                string phoneme = profile.GetPhoneme(i);
-                float ratio = UpdateResultsBuffer[i] * invSumScore; // Avoid division in loop
-                if (!_ratios.TryGetValue(phoneme, out float existingRatio))
-                {
-                    _ratios[phoneme] = ratio; // Add new
-                }
-                else
-                {
-                    _ratios[phoneme] = existingRatio + ratio; // Accumulate
-                }
-            }
-
-            // Normalize volume
-            float rawVol = _info[0].volume;
-            float normVol = math.clamp((math.log10(rawVol) - Common.DefaultMinVolume) / (Common.DefaultMaxVolume - Common.DefaultMinVolume), 0f, 1f);
-
-            // Update result
-            result = new LipSyncInfo()
-            {
-                phoneme = mainPhoneme,
-                volume = normVol,
-                rawVolume = rawVol,
-                phonemeRatios = _ratios,
-            };
-        }
-        void UpdatePhonemes()
-        {
-            int index = 0;
-
-            for (int i = 0; i < mfccsCount && index < PhonemesCount; i++)
-            {
-                NativeArray<float> mfccNativeArray = profile.mfccs[i].mfccNativeArray;
-
-                // Determine how many elements to copy
-                int remainingLength = PhonemesCount - index;
-                int copyLength = math.min(12, remainingLength);
-
-                // Use NativeArray.CopyTo for batch copying
-                NativeArray<float>.Copy(mfccNativeArray, 0, _phonemes, index, copyLength);
-
-                index += copyLength;
-            }
-        }
-
-
-        void ScheduleJob()
-        {
-            if (!_isDataReceived) return;
-            _isDataReceived = false;
-
-            CachedInputSampleCount = inputSampleCount;
-            int index = 0;
-            lock (_lockObject)
-            {
-                _inputData.CopyFrom(Inputs);
-                index = _index;
-            }
-
-            LipSyncJob lipSyncJob = new LipSyncJob()
-            {
-                input = _inputData,
-                startIndex = index,
-                outputSampleRate = outputSampleRate,
-                targetSampleRate = profile.targetSampleRate,
-                melFilterBankChannels = profile.melFilterBankChannels,
-                means = _means,
-                standardDeviations = _standardDeviations,
-                mfcc = _mfcc,
-                phonemes = _phonemes,
-                compareMethod = profile.compareMethod,
-                scores = _scores,
-                info = _info,
-            };
-
-            _jobHandle = lipSyncJob.Schedule();
-        }
-
         public void RequestCalibration(int index)
         {
             _requestedCalibrationVowels.Add(index);
-        }
-
-        void UpdateCalibration()
-        {
-            int Count = _requestedCalibrationVowels.Count;
-            for (int Index = 0; Index < Count; Index++)
-            {
-                int index = _requestedCalibrationVowels[Index];
-                profile.UpdateMfcc(index, mfcc, true);
-            }
-
-            _requestedCalibrationVowels.Clear();
         }
         int inputSampleCount
         {
@@ -247,27 +228,6 @@ namespace uLipSync
 
             _isDataReceived = true;
         }
-#if UNITY_EDITOR
-        public void OnBakeStart(Profile profile)
-        {
-            this.profile = profile;
-            AllocateBuffers();
-        }
-
-        public void OnBakeEnd()
-        {
-            DisposeBuffers();
-        }
-
-        public void OnBakeUpdate(float[] input, int channels)
-        {
-            OnDataReceived(input, channels,input.Length);
-            UpdatePhonemes();
-            ScheduleJob();
-            _jobHandle.Complete();
-            UpdateResult();
-        }
-#endif
     }
 
 }

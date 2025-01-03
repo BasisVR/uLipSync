@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.Timeline;
 using UnityEditor;
 using UnityEditor.Timeline;
@@ -150,8 +150,6 @@ public class TimelineSetupHeplerWindow : ScriptableWizard
                 data.name = data.audioClip.name;
 
                 var editor = (BakedDataEditor)Editor.CreateEditor(data, typeof(BakedDataEditor));
-                editor.Bake();
-
                 var path = Path.Combine(outputDirectory, data.name + ".asset");
                 AssetDatabase.DeleteAsset(path); 
                 AssetDatabase.CreateAsset(data, path);

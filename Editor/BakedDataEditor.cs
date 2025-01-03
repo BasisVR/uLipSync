@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 using UnityEditor;
 using System.Text;
@@ -58,10 +58,6 @@ public class BakedDataEditor : Editor
         EditorGUI.BeginDisabledGroup(!isValid);
         EditorGUILayout.BeginHorizontal();
         GUILayout.FlexibleSpace();
-        if (GUILayout.Button(data.isDataChanged ? "  * Bake  " : "  Bake  "))
-        {
-            Bake();
-        }
         EditorGUILayout.EndHorizontal();
         EditorGUI.EndDisabledGroup();
     }
@@ -243,54 +239,6 @@ public class BakedDataEditor : Editor
         }
 
         EditorGUILayout.GetControlRect(GUILayout.Height(EditorGUIUtility.singleLineHeight * legendAddLines));
-    }
-
-    public void Bake()
-    {
-        data.bakedProfile = data.profile;
-        data.bakedAudioClip = data.audioClip;
-        data.frames.Clear();
-
-        var clip = data.audioClip;
-        int samplePerFrame = clip.frequency / 60 * clip.channels;
-        var buffer = new float[clip.samples * clip.channels];
-        var tempBuffer = new float[samplePerFrame];
-
-        data.duration = clip.length;
-
-        var go = new GameObject("uLipSync Baking...");
-        var ls = go.AddComponent<uLipSync>();
-        ls.OnBakeStart(data.profile);
-
-        clip.GetData(buffer, 0);
-
-        for (int offset = 0; offset < buffer.Length - samplePerFrame; offset += samplePerFrame)
-        {
-            Array.Copy(buffer, offset, tempBuffer, 0, samplePerFrame);
-            ls.OnBakeUpdate(tempBuffer, clip.channels);
-
-            var frame = new BakedFrame();
-            frame.volume = ls.result.rawVolume;
-            frame.phonemes = new List<BakedPhonemeRatio>();
-
-            foreach (var kv in ls.result.phonemeRatios)
-            {
-                var pr = new BakedPhonemeRatio();
-                pr.phoneme = kv.Key;
-                pr.ratio = kv.Value;
-                frame.phonemes.Add(pr);
-            }
-
-            data.frames.Add(frame);
-
-            var progress = (float)offset / clip.samples;
-        }
-
-        ls.OnBakeEnd();
-        DestroyImmediate(go);
-        
-        EditorUtility.SetDirty(data);
-        AssetDatabase.SaveAssets();
     }
 }
 

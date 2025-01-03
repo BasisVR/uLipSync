@@ -109,8 +109,6 @@ public class BakedDataWizard : ScriptableWizard
             data.name = clip.name;
 
             var editor = (BakedDataEditor)Editor.CreateEditor(data, typeof(BakedDataEditor));
-            editor.Bake();
-
             dataList.Add(data);
 
             var progress = (float)dataList.Count / audioClips.Count;
