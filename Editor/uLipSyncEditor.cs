@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEditor;
 using System.Text;
 
@@ -31,14 +31,6 @@ public class uLipSyncEditor : Editor
             EditorUtil.DrawProperty(serializedObject, nameof(lipSync.autoAudioSyncOnWebGL));
             EditorUtil.DrawProperty(serializedObject, nameof(lipSync.audioSyncOffsetTime));
 #endif
-
-            EditorGUILayout.Separator();
-
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.Space(10f, false);
-            EditorUtil.DrawProperty(serializedObject, nameof(lipSync.onLipSyncUpdate));
-            EditorGUILayout.EndHorizontal();
-
             EditorGUILayout.Separator();
 
             --EditorGUI.indentLevel;

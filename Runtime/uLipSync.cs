@@ -10,9 +10,6 @@ namespace uLipSync
     public class uLipSync : MonoBehaviour
     {
         public Profile profile;
-        public LipSyncUpdateEvent onLipSyncUpdate = new LipSyncUpdateEvent();
-        uLipSyncAudioSource _currentAudioSourceProxy;
-
         JobHandle _jobHandle;
         object _lockObject = new object();
         bool _allocated = false;
@@ -28,43 +25,14 @@ namespace uLipSync
         NativeArray<LipSyncJob.Info> _info;
         List<int> _requestedCalibrationVowels = new List<int>();
         Dictionary<string, float> _ratios = new Dictionary<string, float>();
-
+        public float[] UpdateResultsBuffer;
+        public int phonemeCount;
         public NativeArray<float> mfcc => _mfccForOther;
         public LipSyncInfo result { get; private set; } = new LipSyncInfo();
         public float[] Inputs;
-#if UNITY_WEBGL
-    public bool autoAudioSyncOnWebGL = true;
-    [Range(-0.1f, 0.3f)] public float audioSyncOffsetTime = 0f;
-#if !UNITY_EDITOR
-    float[] _audioBuffer = null;
-#endif
-    bool _isWebGLProcessed = false;
-#endif
-
-#if ULIPSYNC_DEBUG
-    NativeArray<float> _debugData;
-    NativeArray<float> _debugSpectrum;
-    NativeArray<float> _debugMelSpectrum;
-    NativeArray<float> _debugMelCepstrum;
-    NativeArray<float> _debugDataForOther;
-    NativeArray<float> _debugSpectrumForOther;
-    NativeArray<float> _debugMelSpectrumForOther;
-    NativeArray<float> _debugMelCepstrumForOther;
-    public NativeArray<float> data => _debugDataForOther;
-    public NativeArray<float> spectrum => _debugSpectrumForOther;
-    public NativeArray<float> melSpectrum => _debugMelSpectrumForOther;
-    public NativeArray<float> melCepstrum => _debugMelCepstrumForOther;
-#endif
         int mfccNum => profile ? profile.mfccNum : 12;
-
-        void Awake()
-        {
-#if UNITY_WEBGL && !UNITY_EDITOR
-        InitializeWebGL();
-#endif
-        }
-
-        void OnEnable()
+        public uLipSyncBlendShape uLipSyncBlendShape;
+        public void Initalize()
         {
             AllocateBuffers();
         }
@@ -75,24 +43,18 @@ namespace uLipSync
             DisposeBuffers();
         }
 
-       public void LateUpdate()
+        public void LateUpdate()
         {
-            if (!profile) return;
-            if (!_jobHandle.IsCompleted) return;
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-        UpdateWebGL();
-#endif
+            if (_jobHandle.IsCompleted == false)
+            {
+                return;
+            }
             UpdateResult();
-            InvokeCallback();
+            uLipSyncBlendShape.OnLipSyncUpdate(result);
             UpdateCalibration();
             UpdatePhonemes();
             ScheduleJob();
-
-            UpdateBuffers();
         }
-        public float[] UpdateResultsBuffer;
-        public int phonemeCount;
         void AllocateBuffers()
         {
             if (_allocated)
@@ -117,19 +79,16 @@ namespace uLipSync
                 UpdateResultsBuffer = new float[phonemeCount];
                 _phonemes = new NativeArray<float>(mfccNum * phonemeCount, Allocator.Persistent);
                 _info = new NativeArray<LipSyncJob.Info>(1, Allocator.Persistent);
-#if ULIPSYNC_DEBUG
-            _debugData = new NativeArray<float>(profile.sampleCount, Allocator.Persistent);
-            _debugDataForOther = new NativeArray<float>(profile.sampleCount, Allocator.Persistent);
-            _debugSpectrum = new NativeArray<float>(profile.sampleCount, Allocator.Persistent);
-            _debugSpectrumForOther = new NativeArray<float>(profile.sampleCount, Allocator.Persistent);
-            _debugMelSpectrum = new NativeArray<float>(profile.melFilterBankChannels, Allocator.Persistent);
-            _debugMelSpectrumForOther = new NativeArray<float>(profile.melFilterBankChannels, Allocator.Persistent);
-            _debugMelCepstrum = new NativeArray<float>(profile.melFilterBankChannels, Allocator.Persistent);
-            _debugMelCepstrumForOther = new NativeArray<float>(profile.melFilterBankChannels, Allocator.Persistent);
-#endif
+                _means.CopyFrom(profile.means);
+                _standardDeviations.CopyFrom(profile.standardDeviation);
+                PhonemesCount = mfccNum * phonemeCount;
+                mfccsCount = profile.mfccs.Count;
+                outputSampleRate = AudioSettings.outputSampleRate;
             }
         }
-
+        public int outputSampleRate;
+        public int PhonemesCount;
+        public int mfccsCount;
         void DisposeBuffers()
         {
             if (!_allocated) return;
@@ -148,60 +107,12 @@ namespace uLipSync
                 _scores.Dispose();
                 _phonemes.Dispose();
                 _info.Dispose();
-#if ULIPSYNC_DEBUG
-            _debugData.Dispose();
-            _debugDataForOther.Dispose();
-            _debugSpectrum.Dispose();
-            _debugSpectrumForOther.Dispose();
-            _debugMelSpectrum.Dispose();
-            _debugMelSpectrumForOther.Dispose();
-            _debugMelCepstrum.Dispose();
-            _debugMelCepstrumForOther.Dispose();
-#endif
-            }
-        }
-
-        void UpdateBuffers()
-        {
-            if (CachedInputSampleCount != Inputs.Length ||
-                profile.mfccs.Count * mfccNum != _phonemes.Length
-#if ULIPSYNC_DEBUG
-            || profile.melFilterBankChannels != _debugMelSpectrum.Length
-#endif
-            )
-            {
-                lock (_lockObject)
-                {
-                    DisposeBuffers();
-                    AllocateBuffers();
-                }
             }
         }
         void UpdateResult()
         {
-#if UNITY_WEBGL && !UNITY_EDITOR
-    if (!_isWebGLProcessed)
-    {
-        result = new LipSyncInfo()
-        {
-            phoneme = result.phoneme,
-            volume = 0f,
-            rawVolume = 0f,
-            phonemeRatios = _ratios,
-        };
-        return;
-    }
-#endif
-
             _jobHandle.Complete(); // Wait for async job completion
             _mfccForOther.CopyFrom(_mfcc);
-
-#if ULIPSYNC_DEBUG
-    _debugDataForOther.CopyFrom(_debugData);
-    _debugSpectrumForOther.CopyFrom(_debugSpectrum);
-    _debugMelSpectrumForOther.CopyFrom(_debugMelSpectrum);
-    _debugMelCepstrumForOther.CopyFrom(_debugMelCepstrum);
-#endif
 
             // Main phoneme identification
             int index = _info[0].mainPhonemeIndex;
@@ -234,9 +145,7 @@ namespace uLipSync
 
             // Normalize volume
             float rawVol = _info[0].volume;
-            float minVol = Common.DefaultMinVolume;
-            float maxVol = Common.DefaultMaxVolume;
-            float normVol = math.clamp((math.log10(rawVol) - minVol) / (maxVol - minVol), 0f, 1f);
+            float normVol = math.clamp((math.log10(rawVol) - Common.DefaultMinVolume) / (Common.DefaultMaxVolume - Common.DefaultMinVolume), 0f, 1f);
 
             // Update result
             result = new LipSyncInfo()
@@ -247,24 +156,16 @@ namespace uLipSync
                 phonemeRatios = _ratios,
             };
         }
-
-        void InvokeCallback()
-        {
-            onLipSyncUpdate?.Invoke(result);
-        }
-
         void UpdatePhonemes()
         {
             int index = 0;
-            int phonemeLength = _phonemes.Length;
-            int count = profile.mfccs.Count;
 
-            for (int i = 0; i < count && index < phonemeLength; i++)
+            for (int i = 0; i < mfccsCount && index < PhonemesCount; i++)
             {
                 NativeArray<float> mfccNativeArray = profile.mfccs[i].mfccNativeArray;
 
                 // Determine how many elements to copy
-                int remainingLength = phonemeLength - index;
+                int remainingLength = PhonemesCount - index;
                 int copyLength = math.min(12, remainingLength);
 
                 // Use NativeArray.CopyTo for batch copying
@@ -285,16 +186,14 @@ namespace uLipSync
             lock (_lockObject)
             {
                 _inputData.CopyFrom(Inputs);
-                _means.CopyFrom(profile.means);
-                _standardDeviations.CopyFrom(profile.standardDeviation);
                 index = _index;
             }
 
-            var lipSyncJob = new LipSyncJob()
+            LipSyncJob lipSyncJob = new LipSyncJob()
             {
                 input = _inputData,
                 startIndex = index,
-                outputSampleRate = AudioSettings.outputSampleRate,
+                outputSampleRate = outputSampleRate,
                 targetSampleRate = profile.targetSampleRate,
                 melFilterBankChannels = profile.melFilterBankChannels,
                 means = _means,
@@ -304,12 +203,6 @@ namespace uLipSync
                 compareMethod = profile.compareMethod,
                 scores = _scores,
                 info = _info,
-#if ULIPSYNC_DEBUG
-            debugData = _debugData,
-            debugSpectrum = _debugSpectrum,
-            debugMelSpectrum = _debugMelSpectrum,
-            debugMelCepstrum = _debugMelCepstrum,
-#endif
             };
 
             _jobHandle = lipSyncJob.Schedule();
@@ -322,10 +215,10 @@ namespace uLipSync
 
         void UpdateCalibration()
         {
-            if (!profile) return;
-
-            foreach (var index in _requestedCalibrationVowels)
+            int Count = _requestedCalibrationVowels.Count;
+            for (int Index = 0; Index < Count; Index++)
             {
+                int index = _requestedCalibrationVowels[Index];
                 profile.UpdateMfcc(index, mfcc, true);
             }
 
@@ -354,56 +247,6 @@ namespace uLipSync
 
             _isDataReceived = true;
         }
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-    public void InitializeWebGL()
-    {
-        if (!_audioSource) return;
-
-        if (autoAudioSyncOnWebGL)
-        {
-            WebGL.Register(this);
-        }
-    }
-
-    public void OnAuidoContextInitiallyResumed()
-    {
-        if (!_audioSource) return;
-
-        _audioSource.timeSamples = _audioSource.timeSamples;
-
-        Debug.Log("AudioSource.timeSamples has been automatically synchronized.");
-    }
-
-    void UpdateWebGL()
-    {
-        _isWebGLProcessed = false;
-
-        if (!_audioSource || !_audioSource.isPlaying) return;
-
-        var clip = _audioSource.clip;
-        if (!clip || clip.loadState != AudioDataLoadState.Loaded) return;
-
-        int ch = clip.channels;
-        int fps = Application.targetFrameRate;
-        if (fps <= 0) fps = 60;
-        int n = AudioSettings.outputSampleRate * ch / fps;
-
-        if (_audioBuffer == null || _audioBuffer.Length != n)
-        {
-            _audioBuffer = new float[n];
-        }
-
-        int offset = _audioSource.timeSamples;
-        offset += (int)(audioSyncOffsetTime * AudioSettings.outputSampleRate * ch);
-        offset = math.min(offset, clip.samples - n - 2);
-        clip.GetData(_audioBuffer, offset);
-        OnDataReceived(_audioBuffer, ch);
-
-        _isWebGLProcessed = true;
-    }
-#endif
-
 #if UNITY_EDITOR
         public void OnBakeStart(Profile profile)
         {
@@ -419,7 +262,6 @@ namespace uLipSync
         public void OnBakeUpdate(float[] input, int channels)
         {
             OnDataReceived(input, channels,input.Length);
-            UpdateBuffers();
             UpdatePhonemes();
             ScheduleJob();
             _jobHandle.Complete();

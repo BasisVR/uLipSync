@@ -23,7 +23,7 @@
   "samples": [
     {
       "displayName": "00. Common",
-      "description": "Common assets required for all samples, including UnityChan \u00a9 UTJ/UCL.",
+      "description": "Common assets required for all samples, including UnityChan © UTJ/UCL.",
       "path": "Samples~/00. Common"
     },
     {
@@ -91,5 +91,6 @@
       "description": "A sample for conducting WebGL tests",
       "path": "Samples~/12. WebGL"
     }
-  ]
+  ],
+  "_fingerprint": "d60f02432f913a7c3ea9fa6fe19dcfe1f3557912"
 }
